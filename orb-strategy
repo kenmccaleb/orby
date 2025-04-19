@@ -1,0 +1,111 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © ango-trader
+
+//@version=6
+strategy("Kenchan ORB Strategy", shorttitle = "K-ORBs", overlay=true)
+
+// get user input
+timeZone = input.string("America/New_York", title="Timezone", options=["America/New_York", "Europe/Amsterdam", "Europe/Berlin", "Asia/Kolkata", "Asia/Shanghai", "Asia/Tokyo", "Etc/UTC"])
+openingRangeTimePeriod = input.session(title = "Opening Range Time Period", defval = "0930-0945")
+personalTradingTimePeriod = input.session(title = "Personal Trading Time Period", defval = "0930-1130")
+StopLossTarget = input.float(title = "Stop Loss Target", defval=0.5, tooltip="Specify the standard deviation of the opening range. 100% of OR is 1.0")
+ProfitTarget = input.float(title = "Profit Target", defval=0.5, tooltip="Specify the standard deviation of the opening range. 100% of OR is 1.0")
+accountBalance = input.price(title = "Account Balance", defval=10000, tooltip="Specify the starting account balance in USD")
+riskPerTrade = input.float(title = "Risk Per Trade %", defval=1.0, tooltip="Specify the % of account balance you will risk for each trade")
+
+// establish ORB prices and trade toggle switch
+var orbHighPrice = 0.0
+var orbLowPrice  = 0.0
+var enteredBefore = false
+
+// Function to determine if the current bar falls within a given time period such as the opening range or trading hours
+inSession(session) => na(time(timeframe.period, session + ":23456", timeZone)) == false
+
+// check if current bar falls within opening range
+isWithinORPeriod = inSession(openingRangeTimePeriod)
+
+// check if current bar falls within personal trading time period
+isWihinTradingPeriod = inSession(personalTradingTimePeriod)
+
+// check if a trade can be placed. trade can be placed after OR is established and within trading time period
+isTradable = not isWithinORPeriod and isWihinTradingPeriod and strategy.position_size == 0
+
+// check if a new trading period has started
+isSessionStart = isWihinTradingPeriod and not isWihinTradingPeriod[1]
+
+// reset trade trade entry flag when new trading period starts
+enteredBefore := isSessionStart ? false : enteredBefore 
+
+// check if this is the first bar of the OR
+isFirstBar = session.ismarket and isWithinORPeriod and not isWithinORPeriod[1] 
+
+if isFirstBar
+    orbHighPrice := high
+    orbLowPrice := low
+else
+    orbHighPrice := orbHighPrice[1]
+    orbLowPrice := orbLowPrice[1]
+    if high > orbHighPrice and isWithinORPeriod
+        orbHighPrice := high
+    if low < orbLowPrice and isWithinORPeriod
+        orbLowPrice := low
+
+// check if breakout 
+isLongBreakout = close > orbHighPrice
+isShortBreakout = close < orbLowPrice
+
+// check if we have confirmation for out setups
+validLong = isTradable and isLongBreakout and not enteredBefore// and barstate.isconfirmed
+validShort = isTradable and isShortBreakout and not enteredBefore // and barstate.isconfirmed
+
+// calculate stop and target prices
+orbRange = orbHighPrice - orbLowPrice
+orbMidPrice = orbLowPrice + (orbRange * 0.5)
+stopSize = orbRange * 0.5
+stopTickSize = stopSize / 0.25
+longTargetPrice = orbHighPrice + stopSize
+shortTargetPrice = orbLowPrice - stopSize
+
+// save SL and TP targets for the trade
+var tradeStopPrice = 0.0
+var tradeTargetPrice = 0.0
+var tradePositionSize = 1
+
+// detect valid long setup and open position
+if validLong
+    tradeStopPrice := orbMidPrice
+    tradeTargetPrice := longTargetPrice
+    strategy.entry(id="long", direction=strategy.long, qty=tradePositionSize)
+    enteredBefore := true
+
+strategy.exit(id="long-exit", from_entry = "long", qty=tradePositionSize, limit=tradeTargetPrice, stop=tradeStopPrice)
+
+// detect valid short setup and trigger alerts
+if validShort and not enteredBefore
+    tradeStopPrice := orbMidPrice
+    tradeTargetPrice := shortTargetPrice
+    strategy.entry(id="short", direction=strategy.short, qty=tradePositionSize)
+    enteredBefore := true
+
+strategy.exit(id="short-exit", from_entry = "short", qty=tradePositionSize, limit=tradeTargetPrice, stop=tradeStopPrice)
+
+var box dailyBox = na
+
+if isFirstBar
+    dailyBox := box.new(left=bar_index, top=orbHighPrice, right=bar_index + 1, bottom=orbLowPrice, border_width=1)
+
+    // If we don't want the boxes to join, the previous box shouldn't
+    // end on the same bar as the new box starts.
+    box.set_right(dailyBox[1], bar_index[1])
+    
+else
+    box.set_top(dailyBox, orbHighPrice)
+    box.set_rightbottom(dailyBox, right=bar_index + 1, bottom=orbLowPrice)
+
+
+box.set_bgcolor(dailyBox, color.new( color.teal, 90))
+box.set_border_color(dailyBox, color.teal)
+
+plot(not isWithinORPeriod ? orbLowPrice + (orbRange * 0.5): na, style=plot.style_linebr, color=orbLowPrice[1] != orbLowPrice ? na : color.gray, title="ORB Mid Point", linewidth=1)
+plot(not isWithinORPeriod ? orbHighPrice + (orbRange * 0.5) : na, style=plot.style_linebr, color=color.teal, title="ORB High PT +0.5", linewidth=1)
+plot(not isWithinORPeriod ? orbLowPrice + (orbRange * -0.5) : na, style=plot.style_linebr, color=color.teal, title="ORB HLow PT +0.5", linewidth=1)
